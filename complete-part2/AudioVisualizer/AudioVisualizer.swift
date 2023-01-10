@@ -10,6 +10,8 @@ import Cocoa
 import MetalKit
 import simd
 
+let resolution = TimeInterval(1.0 / 120)
+let freqeuencyBufferLength = 362 * MemoryLayout<Float>.stride
 class AudioVisualizer: NSView {
     
     //MARK: METAL VARS
@@ -25,8 +27,7 @@ class AudioVisualizer: NSView {
     private var loudnessUniformBuffer : MTLBuffer!
     public var loudnessMagnitude : Float = 0.3 {
         didSet{
-            loudnessUniformBuffer = metalDevice.makeBuffer(bytes: &loudnessMagnitude, length: MemoryLayout<Float>.stride, options: [])!
-            metalView.draw()
+            loudnessUniformBuffer.contents().copyMemory(from: &loudnessMagnitude, byteCount: MemoryLayout<Float>.stride)
         }
     }
     
@@ -34,8 +35,9 @@ class AudioVisualizer: NSView {
     public var frequencyVertices : [Float] = [Float](repeating: 0, count: 361) {
         didSet{
             let sliced = Array(frequencyVertices[76..<438])
-            freqeuencyBuffer = metalDevice.makeBuffer(bytes: sliced, length: sliced.count * MemoryLayout<Float>.stride, options: [])!
-            metalView.draw()
+            freqeuencyBuffer.contents().copyMemory(from: sliced,
+                                                   byteCount: freqeuencyBufferLength)
+            renderDraw()
         }
     }
 
@@ -54,6 +56,24 @@ class AudioVisualizer: NSView {
     //MARK: SETUP
     fileprivate func setupView(){
         translatesAutoresizingMaskIntoConstraints = false
+    }
+    
+    var lastDraw = Date().timeIntervalSince1970
+    let drawSemaphore = DispatchSemaphore(value: 1)
+    let renderQueue = DispatchQueue(label: "Render Queue", qos: .userInteractive)
+    
+    @objc
+    func _draw() {
+        let current = Date().timeIntervalSince1970
+        if lastDraw + resolution > current {
+            return
+        }
+        lastDraw = current
+        metalView.draw()
+    }
+    
+    func renderDraw() {
+        performSelector(inBackground: #selector(_draw), with: nil)
     }
     
     fileprivate func setupMetal(){
@@ -91,8 +111,12 @@ class AudioVisualizer: NSView {
         //initialize the freqeuencyBuffer data
         freqeuencyBuffer = metalDevice.makeBuffer(bytes: frequencyVertices, length: frequencyVertices.count * MemoryLayout<Float>.stride, options: [])!
         
+        loudnessUniformBuffer = metalDevice.makeBuffer(bytes: &loudnessMagnitude, length: MemoryLayout<Float>.stride, options: [])!
+        
+        freqeuencyBuffer = metalDevice.makeBuffer(length: freqeuencyBufferLength)
+        
         //draw
-        metalView.draw()
+        renderDraw()
     }
     
     fileprivate func createPipelineState(){
@@ -137,7 +161,11 @@ extension AudioVisualizer : MTKViewDelegate {
     
     func draw(in view: MTKView) {
         //Creating the commandBuffer for the queue
-        guard let commandBuffer = metalCommandQueue.makeCommandBuffer() else {return}
+        guard let commandBuffer = metalCommandQueue.makeCommandBuffer(),
+        let vertexBuffer = vertexBuffer,
+        let loudnessUniformBuffer = loudnessUniformBuffer,
+        let freqeuencyBuffer = freqeuencyBuffer,
+        let currentDrawable = view.currentDrawable else {return}
         //Creating the interface for the pipeline
         guard let renderDescriptor = view.currentRenderPassDescriptor else {return}
         //Setting a "background color"
@@ -157,7 +185,11 @@ extension AudioVisualizer : MTKViewDelegate {
         renderEncoder.drawPrimitives(type: .lineStrip, vertexStart: 1081, vertexCount: 1081)
         
         renderEncoder.endEncoding()
-        commandBuffer.present(view.currentDrawable!)
+        commandBuffer.present(currentDrawable)
+        
+        commandBuffer.addCompletedHandler {[weak self] _ in
+            self?.drawSemaphore.signal()
+        }
         commandBuffer.commit()
     }
 }

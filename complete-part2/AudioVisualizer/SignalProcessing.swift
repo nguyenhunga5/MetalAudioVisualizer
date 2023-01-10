@@ -52,7 +52,13 @@ class SignalProcessing {
         //our results are now inside realOut and imagOut
         
         //package it inside a complex vector representation used in the vDSP framework
-        var complex = DSPSplitComplex(realp: &realOut, imagp: &imagOut)
+//        var complex = DSPSplitComplex(realp: &realOut, imagp: &imagOut)
+        var complex: DSPSplitComplex!
+        realOut.withUnsafeMutableBufferPointer { realOutPointer in
+            imagOut.withUnsafeMutableBufferPointer { imagOutPointer in
+                complex = DSPSplitComplex(realp: realOutPointer.baseAddress!, imagp: imagOutPointer.baseAddress!)
+            }
+        }
         
         //setup magnitude output
         var magnitudes = [Float](repeating: 0, count: 512)
